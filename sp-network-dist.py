@@ -56,8 +56,7 @@ class EmpricalEvalDist:
         return out.reshape(z.shape)
     
     def _find_u_for_z(self, z: _ctype, tol: _ftype = 1e-10, max_iter: int = 300) -> _ctype:
-        eps = abs(np.imag(z))
-        u = _ctype(-0.1, -(eps + 1e-4))
+        u = 1.0 / z if z != 0 else 1.0 + 0j
 
         def Fu(u_: _ctype) -> _ctype:
             return _ctype(self._Stransform(np.asarray(u_, dtype=_ctype))) * u_ / (1.0 + u_) - 1.0 / z 
@@ -149,10 +148,16 @@ def classical_multiplicative_convolution(dist1: EmpricalEvalDist, dist2: Emprica
         n = 10000
         x_min = x.min()
         x_max = x.max()
-        lo = min(x_min / dist1.support[1], dist2.support[0])
-        hi = max(x_max/ dist1.support[0], dist2.support[1])
+        lo = min([x_min / dist1.support()[1], dist2.support()[0]])
+        lo = int(lo) + 0.01
+        denom = dist1.support()[0]
+        hi = x_max / denom if denom != 0 else 10
+        hi = max([hi, dist2.support()[1]])
         u = np.linspace(lo, hi, n)
-        vals = dist1.pdf(x / u) * dist2.pdf(u) / u
-        return np.trapezoid(vals, u)
+        print(u)
+        u = u[np.newaxis, :]
+        vals = dist1.pdf(x[:, np.newaxis] / u) * dist2.pdf(u) / u
+        return np.trapezoid(vals, u, axis=1)
+    
     
     return EmpricalEvalDist(_pdf=pdf_prod)
