@@ -14,7 +14,7 @@ class EmpricalEvalDist:
             self._pdf = None
             self._Stransform = _Stransform
         else:
-            raise ValueError("Provide `eigenvalues` or `_s_fn`.")
+            raise ValueError("Provide `probility density function` or `S transofrm`.")
         
     def __repr__(self) -> str:
         pass
@@ -22,32 +22,32 @@ class EmpricalEvalDist:
     def support(self):
         pass
 
-    def pdf(self, x: float | NDArray[_ftype], eps: float = 1e-12) -> float | NDArray:
+    def pdf(self, x: NDArray[_ftype], eps: _ftype = 1e-12) -> NDArray[_ftype]:
         x = np.asarray(x, dtype=_ftype)
-        scalar = x.ndim == 0
         if self._pdf is not None:
-            return float(self._pdf(x)[0]) if scalar else self._pdf
+            return self._pdf(x)
         else:
-            out = (-1.0 / np.pi) * np.imag(self.Caychytransform(x + 1j * eps))
-            return float(out[0]) if scalar else out
+            return (-1.0 / np.pi) * np.imag(self.Caychytransform(x + 1j * eps))
 
-    def Caychytransform(self, z: complex | NDArray[_ctype]) -> complex | NDArray[_ctype]:
+    def Caychytransform(self, z: NDArray[_ctype]) -> NDArray[_ctype]:
         z = np.asarray(z, dtype=_ctype)
-        scalar = z.ndim == 0
         if self._pdf is not None:
             pass
-
-        return complex(self._Cauchy_from_S(z)[0]) if scalar else self._Cauchy_from_S(z)[0]
+        else:
+            return self._Cauchy_from_S(z)
 
     def Rtransform(self):
         pass
 
-    def Stransform(self, z: complex | NDArray[_ctype]) -> complex | NDArray[_ctype]:
-        if self._Stransform is not None:
+    def Stransform(self, z: NDArray[_ctype]) -> NDArray[_ctype]:
+        z = np.asarray(z, dtype=_ctype)
+        if self._pdf is not None:
+            pass
+        else:
             return self._Stransform(z)
-        pass
 
     def _Cauchy_from_S(self, z: NDArray[_ctype]) -> NDArray[_ctype]:
+        z = np.asarray(z, dtype=_ctype)
         z_flat = np.atleast_1d(z).ravel()
         out = np.empty_like(z_flat)
         for i, zi in enumerate(z_flat):
@@ -55,7 +55,7 @@ class EmpricalEvalDist:
             out[i] = (1.0 + u) / zi
         return out.reshape(z.shape)
     
-    def _find_u_for_z(self, z: _ctype, tol: float = 1e-10, max_iter: int = 300) -> _ctype:
+    def _find_u_for_z(self, z: _ctype, tol: _ftype = 1e-10, max_iter: int = 300) -> _ctype:
         eps = abs(np.imag(z))
         u = _ctype(-0.1, -(eps + 1e-4))
 
@@ -76,7 +76,7 @@ class EmpricalEvalDist:
 
 
 class MarchenkoPastur:
-    def __init__(self, lam: float, sig: float = 1.0):
+    def __init__(self, lam: _ftype, sig: _ftype = 1.0):
         if lam <= 0: 
             raise ValueError(f"lambda must be positive, got {lam}")
         if sig <= 0:
@@ -93,16 +93,16 @@ class MarchenkoPastur:
         return (
             f"MarchenkoPastur("
             f"lambda={self.lam}, sigma={self.sig}, "
-            f"support=[{self.lam_minus:.4f}, {self.lam_plus:.4f}]"
-            f"{', point_mass_at_0='+f'{self.point_mass_at_zero:.4f}' if self.point_mass_at_zero > 0 else ''})"
+            f"support=[{self.lam_minus:.4f}, {self.lam_plus:.4f}], "
+            f"{'point_mass_at_0='+f'{self.point_mass_at_zero:.4f}' if self.point_mass_at_zero > 0 else ''})"
         )
     
-    def support(self) -> tuple[float, float]:
+    def support(self) -> tuple[_ftype, _ftype]:
         return (self.lam_minus, self.lam_plus)
     
-    def pdf(self, x: np.ndarray | float) -> np.ndarray | float:
-        x = np.asarray(x, dtype=float)
-        scalar = x.ndim == 0
+    def pdf(self, x: NDArray[_ftype]) -> NDArray[_ftype]:
+        x = np.asarray(x, dtype=_ftype)
+        shape = x.shape
         x = np.atleast_1d(x)
 
         out = np.zeros_like(x)
@@ -117,22 +117,24 @@ class MarchenkoPastur:
         # xm = x[mask]
         # out[mask] = self.point_mass_at_zero
 
-        return float(out[0]) if scalar else out
+        return out.reshape(shape)
     
-    def Caychytransform(self, z: NDArray[_ctype] | complex) -> NDArray[_ctype] | complex: 
+    def Caychytransform(self, z: NDArray[_ctype]) -> NDArray[_ctype]: 
         pass
 
     # def Rtransform(self, z: sp.Symbol) -> sp.Symbol:
     #     return self.sig ** 2 / (1 - self.sig ** 2 * self.lam * z)
     
-    def Rtransform(self, z: NDArray[_ctype] | complex) -> NDArray[_ctype] | complex:
-        return self.sig ** 2 / (1 - self.sig ** 2 * self.lam * z)
+    def Rtransform(self, z: NDArray[_ctype]) -> NDArray[_ctype]:
+        z = np.asarray(z, dtype=_ctype)
+        return self.sig ** 2 / (1.0 - self.sig ** 2 * self.lam * z)
 
     # def Stransform(self, z: sp.Symbol) -> sp.Symbol:
     #     return 1 / (1 + self.lam * z) / self.sig ** 2
 
-    def Stransform(self, z: NDArray[_ctype] | complex) -> NDArray[_ctype] | complex:
-        return 1 / (1 + self.lam * z) / self.sig ** 2
+    def Stransform(self, z: NDArray[_ctype]) -> NDArray[_ctype]:
+        z = np.asarray(z, dtype=_ctype)
+        return 1.0 / (1.0 + self.lam * z) / self.sig ** 2
 
 def free_multiplicative_convolution(dist1: EmpricalEvalDist, dist2: EmpricalEvalDist) -> EmpricalEvalDist:
 
