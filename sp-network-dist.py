@@ -55,66 +55,89 @@ class EmpricalEvalDist:
         else:
             return self._dStransform(z)
 
-    def _Cauchy_from_S(self, z: NDArray[_ctype]) -> NDArray[_ctype]:
+    def _Cauchy_from_S(
+            self,
+            z: NDArray[_ctype],
+            tol: _ftype = 1e-10,
+            max_iter: int = 50,
+            n_eps: int = 10,
+            ) -> NDArray[_ctype]:
         z = np.asarray(z, dtype=_ctype)
         z_flat = np.atleast_1d(z).ravel()
-        out = np.empty_like(z_flat)
-        for i, zi in enumerate(z_flat):
-            u = self._find_u_for_z(zi)
-            out[i] = (1.0 + u) / zi
+        n = len(z_flat)
+        z_real = np.real(z_flat)
+
+        eps_sequence = 10 ** np.arange(n_eps)[::-1, np.newaxis] * np.imag(z_flat)[np.newaxis, :]
+        u = 1.0 / (z_real + 1j * eps_sequence[0])
+
+        for i in range(n_eps):
+            z_i = z_real + 1j * eps_sequence[i]
+
+            converged = np.zeros(n, dtype=bool)
+
+            for _ in range(max_iter):
+                active = ~converged
+                if not np.any(active):
+                    break
+
+                u_a, z_a = u[active], z_i[active]
+
+                u_new, f, f_new = self._newton_step_batch(u_a, z_a)
+                u_new = self._backtrack_batch(u_a, u_new, f, f_new, z_a)
+
+                delta = np.abs(u_new - u_a)
+                newly_converged = delta < tol * np.maximum(1.0, np.abs(u_a))
+                converged[active] = newly_converged
+                u[active] = u_new
+            
+            if np.all(converged):
+                break
+
+        out = (1.0 + u) / z_flat
         return out.reshape(z.shape)
     
-    def _find_u_for_z(self, z: _ctype, tol: _ftype = 1e-10, max_iter: int = 50) -> _ctype:
-        eps = np.geomspace(10, 1e-8, num=10)
+    def _newton_step_batch(self, u: NDArray[_ctype], z: NDArray[_ctype]):
+        S_u = self._Stransform(u)
+        dS_u = self._dStransform(u)
 
-        def Fu(u_: _ctype, z_: _ctype) -> _ctype:
-            return u_ * (self._Stransform(u_) * u_ / (1.0 + u_) - 1.0 / z_)
-        
-        def dFu(u_: _ctype, z_: _ctype) -> _ctype:
-            return u_* (self._dStransform(u_) * u_ / (1.0 + u_) + self._Stransform(u_) / (1.0 + u_) ** 2) + Fu(u_, z_)
-        
-        u = None
-        for eps_i in eps:
-            z_i = np.real(z) + 1j * eps_i
-            if u is None:
-                u = 1.0 / z_i
-            else:
-                pass
-        
-            for _ in range(max_iter):
-                f = Fu(u, z_i)
-                df = dFu(u, z_i)
-                if abs(df) < 1e-14:
-                    u1 = u * (1.0 + 0.01)
-                    step = f * (u1 - u) / (Fu(u1, z_i) - f + 1e-15)
-                else:
-                    step = f / df
+        u_plus_1 = 1.0 + u
+        f = u * (S_u * u / u_plus_1 - 1.0 / z)
+        df = u * (dS_u * u / u_plus_1 + S_u / u_plus_1 ** 2) + f
 
-                u_new = u - step
+        safe = np.abs(df) >= 1e-14
+        u1 = np.where(safe, u, u * 1.01)
+        S_u1 = np.where(safe, np.ones_like(u), self._Stransform(u1))
+        f1 = np.where(safe, np.zeros_like(f), u1 * (S_u1 * u1 / (1.0 + u1) - 1.0 / z))
+        df = np.where(safe, df, (f1 - f + 1e-15) / (0.01 * u))
 
-                if np.imag(u_new) > 0:
-                    u_new = u_new.conj()
+        u_new = u - f/df
+        u_new = np.where(np.imag(u_new)>0, u_new.conj(), u_new)
 
-                f_new = Fu(u_new, z_i)
-                alpha = 1.0
+        f_new = u_new * (self._Stransform(u_new) * u_new / (1.0 + u_new) - 1.0 / z)
+        return u_new, f, f_new
+    
+    def _backtrack_batch(self, u: NDArray[_ctype], u_new: NDArray[_ctype], f: NDArray[_ctype], f_new: NDArray[_ctype], z: NDArray[_ctype]):
+        alpha = np.ones(len(u), dtype=_ftype)
+        thresh = np.abs(f) * 1.1
 
-                while alpha > 1e-8 and abs(f_new) > abs(f) * 1.1:
-                    alpha *= 0.5
-                    u_try = u + alpha * (u_new - u)
-                    if np.imag(u_try) > 0:
-                        u_try = u_try.conj()
+        needs_bt = np.abs(f_new) > thresh
+        iters = 0
 
-                    f_try = Fu(u_try, z_i)
-                    if abs(f_try) < abs(f_new):
-                        f_new = f_try
-                        u_new = u_try
+        while np.any(needs_bt) and np.any(alpha > 1e-8) and iters < 20:
+            alpha[needs_bt] *= 0.5
+            u_try = u + alpha * (u_new - u)
+            u_try = np.where(np.imag(u_try)>0, u_try.conj(), u_try)
 
-                if abs(u_new - u) < tol * max([1.0, abs(u)]):
-                    u = u_new
-                    break
-                u = u_new
-        return u
+            f_try = u_try * (self._Stransform(u_try) * u_try / (1.0 + u_try) - 1.0 / z)
+            improved = np.abs(f_try) < np.abs(f_new)
 
+            u_new = np.where(improved, u_try, u_new)
+            f_new = np.where(improved, f_try, f_new)
+
+            needs_bt = (np.abs(f_new) > thresh)
+            iters += 1
+
+        return u_new
 
 class MarchenkoPastur:
     def __init__(self, lam: _ftype, sig: _ftype = 1.0):
