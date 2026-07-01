@@ -222,12 +222,12 @@ def free_multiplicative_convolution(dist1: EmpricalEvalDist, dist2: EmpricalEval
 def classical_multiplicative_convolution(dist1: EmpricalEvalDist, dist2: EmpricalEvalDist) -> EmpricalEvalDist:
     
     def pdf_prod(x: NDArray[_ftype]) -> NDArray[_ftype]:
-        theta = np.linspace(-np.pi/2 + 1e-5, np.pi/2 - 1e-5, 10000)[np.newaxis, :]
-        u = np.tan(theta)
-        du_dtheta = 1 / np.cos(theta)**2
+        t = np.linspace(-10, 10, 10000)[np.newaxis, :]
+        u = np.sinh(t)
+        du_dt = np.cosh(t)
 
         x = x[:, np.newaxis]
-        integrand = dist1.pdf(x / u) * dist2.pdf(u) / u * du_dtheta 
-        return np.trapezoid(integrand, theta, axis=1)
+        integrand = dist1.pdf(x / u) * dist2.pdf(u) / u * du_dt 
+        return np.trapezoid(integrand, t, axis=1)
     
     return EmpricalEvalDist(_pdf=pdf_prod)
