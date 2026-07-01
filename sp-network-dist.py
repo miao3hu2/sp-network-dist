@@ -89,9 +89,6 @@ class EmpricalEvalDist:
                 newly_converged = delta < tol * np.maximum(1.0, np.abs(u_a))
                 converged[active] = newly_converged
                 u[active] = u_new
-            
-            if np.all(converged):
-                break
 
         out = (1.0 + u) / z_flat
         return out.reshape(z.shape)
@@ -106,8 +103,8 @@ class EmpricalEvalDist:
 
         safe = np.abs(df) >= 1e-14
         u1 = np.where(safe, u, u * 1.01)
-        S_u1 = np.where(safe, np.ones_like(u), self._Stransform(u1))
-        f1 = np.where(safe, np.zeros_like(f), u1 * (S_u1 * u1 / (1.0 + u1) - 1.0 / z))
+        S_u1 = np.where(safe, S_u, self._Stransform(u1))
+        f1 = np.where(safe, f, u1 * (S_u1 * u1 / (1.0 + u1) - 1.0 / z))
         df = np.where(safe, df, (f1 - f + 1e-15) / (0.01 * u))
 
         u_new = u - f/df
