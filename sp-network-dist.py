@@ -24,7 +24,7 @@ class EmpricalEvalDist:
     def support(self):
         pass
 
-    def pdf(self, x: NDArray[_ftype], eps: _ftype = 1e-8) -> NDArray[_ftype]:
+    def pdf(self, x: NDArray[_ftype], eps: _ftype = 1e-7) -> NDArray[_ftype]:
         x = np.asarray(x, dtype=_ftype)
         if self._pdf is not None:
             return self._pdf(x)
@@ -58,19 +58,24 @@ class EmpricalEvalDist:
     def _Cauchy_from_S(
             self,
             z: NDArray[_ctype],
-            tol: _ftype = 1e-10,
-            max_iter: int = 50,
-            n_eps: int = 10,
+            tol: _ftype = 1e-14,
+            tol_res: _ftype = 1e-13,
+            max_iter: int = 100
             ) -> NDArray[_ctype]:
         z = np.asarray(z, dtype=_ctype)
         z_flat = np.atleast_1d(z).ravel()
         n = len(z_flat)
         z_real = np.real(z_flat)
 
-        eps_sequence = 10 ** np.arange(n_eps)[::-1, np.newaxis] * np.imag(z_flat)[np.newaxis, :]
+        eps_target = np.imag(z_flat)
+        eps_start  = 10.0
+        ratio      = 10 ** 0.5
+        eps_steps = int(np.ceil(np.log10(eps_start / eps_target.min()) / np.log10(ratio))) + 1
+        steps = ratio ** np.arange(eps_steps)[::-1]
+        eps_sequence = (eps_start / steps[0]) * steps[:, np.newaxis] * (eps_target / eps_target)[np.newaxis, :]
         u = 1.0 / (z_real + 1j * eps_sequence[0])
 
-        for i in range(n_eps):
+        for i in range(eps_steps):
             z_i = z_real + 1j * eps_sequence[i]
 
             converged = np.zeros(n, dtype=bool)
@@ -86,11 +91,15 @@ class EmpricalEvalDist:
                 u_new = self._backtrack_batch(u_a, u_new, f, f_new, z_a)
 
                 delta = np.abs(u_new - u_a)
-                newly_converged = delta < tol * np.maximum(1.0, np.abs(u_a))
+                f_new_res = np.abs(u_new * (self._Stransform(u_new) * u_new / (1.0 + u_new) - 1.0 / z_a))
+                newly_converged = ((delta < tol * np.maximum(1.0, np.abs(u_a))) & (f_new_res < tol_res))
                 converged[active] = newly_converged
                 u[active] = u_new
 
-        out = (1.0 + u) / z_flat
+        u_ld = u.astype(np.clongdouble)
+        z_ld = z_flat.astype(np.clongdouble)
+        out_ld = (1.0 + u_ld) / z_ld
+        out = out_ld.astype(_ctype)
         return out.reshape(z.shape)
     
     def _newton_step_batch(self, u: NDArray[_ctype], z: NDArray[_ctype]):
