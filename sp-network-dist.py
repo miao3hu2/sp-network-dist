@@ -68,11 +68,10 @@ class EmpricalEvalDist:
         z_real = np.real(z_flat)
 
         eps_target = np.imag(z_flat)
-        eps_start  = 10.0
-        ratio      = 10 ** 0.5
+        eps_start = 10.0
+        ratio = 10 ** 0.5
         eps_steps = int(np.ceil(np.log10(eps_start / eps_target.min()) / np.log10(ratio))) + 1
-        steps = ratio ** np.arange(eps_steps)[::-1]
-        eps_sequence = (eps_start / steps[0]) * steps[:, np.newaxis] * (eps_target / eps_target)[np.newaxis, :]
+        eps_sequence = np.geomspace(eps_start, eps_target, num=eps_steps)
         u = 1.0 / (z_real + 1j * eps_sequence[0])
 
         for i in range(eps_steps):
