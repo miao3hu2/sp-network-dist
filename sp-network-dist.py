@@ -6,13 +6,17 @@ _ftype = np.float64
 _ctype = np.complex128
 
 class EmpricalEvalDist:
-    def __init__(self, _pdf: Callable[[NDArray[_ftype]], NDArray[_ftype]] | None = None, _Stransform: Callable[[NDArray[_ctype]], NDArray[_ctype]] | None = None, _dStransform: Callable[[NDArray[_ctype]], NDArray[_ctype]] | None = None) -> None:
+    def __init__(self, _pdf: Callable[[NDArray[_ftype]], NDArray[_ftype]] | None = None, _Cauchytransform: Callable[[NDArray[_ftype]], NDArray[_ftype]] | None = None, _dCauchytransform: Callable[[NDArray[_ftype]], NDArray[_ftype]] | None = None, _Stransform: Callable[[NDArray[_ctype]], NDArray[_ctype]] | None = None, _dStransform: Callable[[NDArray[_ctype]], NDArray[_ctype]] | None = None) -> None:
         if _pdf is not None:
             self._pdf = _pdf
+            self._Cauchytransform = _Cauchytransform
+            self._dCauchytransform = _dCauchytransform
             self._Stransform = None
             self._dStransform = None
         elif _Stransform is not None:
             self._pdf = None
+            self._Cauchytransform = None
+            self._dCauchytransform = None
             self._Stransform = _Stransform
             self._dStransform = _dStransform
         else:
@@ -29,12 +33,12 @@ class EmpricalEvalDist:
         if self._pdf is not None:
             return self._pdf(x)
         else:
-            return (-1.0 / np.pi) * np.imag(self.Caychytransform(x + 1j * eps))
+            return (-1.0 / np.pi) * np.imag(self.Cauchytransform(x + 1j * eps))
 
-    def Caychytransform(self, z: NDArray[_ctype]) -> NDArray[_ctype]:
+    def Cauchytransform(self, z: NDArray[_ctype]) -> NDArray[_ctype]:
         z = np.asarray(z, dtype=_ctype)
         if self._pdf is not None:
-            pass
+            return self._Cauchytransform(z)
         else:
             return self._Cauchy_from_S(z)
 
@@ -44,24 +48,27 @@ class EmpricalEvalDist:
     def Stransform(self, z: NDArray[_ctype]) -> NDArray[_ctype]:
         z = np.asarray(z, dtype=_ctype)
         if self._pdf is not None:
-            pass
+            return self._S_from_Cauchy(z)
         else:
             return self._Stransform(z)
         
-    def dStransform(self, z: NDArray[_ctype]) -> NDArray[_ctype]:
-        z = np.asarray(z, dtype=_ctype)
-        if self._pdf is not None:
-            pass
-        else:
-            return self._dStransform(z)
-
-    def _Cauchy_from_S(
+    def _S_from_Cauchy(
             self,
             z: NDArray[_ctype],
             tol: _ftype = 1e-14,
-            tol_res: _ftype = 1e-13,
             max_iter: int = 100
-            ) -> NDArray[_ctype]:
+    ) -> NDArray[_ctype]:
+        
+        def func(u: NDArray[_ctype], z: NDArray[_ctype], with_derivative: bool = False):
+            Cauchy_1_over_u = self._Cauchytransform(1/u)
+            f = Cauchy_1_over_u / u - 1.0 - z
+
+            if with_derivative:
+                df = self._dCauchytransform(1/u) / u - Cauchy_1_over_u / u ** 2
+                return f, df
+            else:
+                return f
+            
         z = np.asarray(z, dtype=_ctype)
         z_flat = np.atleast_1d(z).ravel()
         n = len(z_flat)
@@ -86,12 +93,67 @@ class EmpricalEvalDist:
 
                 u_a, z_a = u[active], z_i[active]
 
-                u_new, f, f_new = self._newton_step_batch(u_a, z_a)
-                u_new = self._backtrack_batch(u_a, u_new, f, f_new, z_a)
+                u_new, f, f_new = self._newton_step_batch(u_a, z_a, func)
+                u_new = self._backtrack_batch(u_a, u_new, f, f_new, z_a, func)
 
                 delta = np.abs(u_new - u_a)
-                f_new_res = np.abs(u_new * (self._Stransform(u_new) * u_new / (1.0 + u_new) - 1.0 / z_a))
-                newly_converged = ((delta < tol * np.maximum(1.0, np.abs(u_a))) & (f_new_res < tol_res))
+                newly_converged = (delta < tol * np.maximum(1.0, np.abs(u_a)))
+                converged[active] = newly_converged
+                u[active] = u_new
+
+        u_ld = u.astype(np.clongdouble)
+        z_ld = z_flat.astype(np.clongdouble)
+        out_ld = u_ld * (z_ld + 1.0) / z_ld
+        out = out_ld.astype(_ctype)
+        return out.reshape(z.shape)
+
+    def _Cauchy_from_S(
+            self,
+            z: NDArray[_ctype],
+            tol: _ftype = 1e-14,
+            max_iter: int = 100
+            ) -> NDArray[_ctype]:
+        
+        def func(u: NDArray[_ctype], z: NDArray[_ctype], with_derivative: bool = False):
+            S_u = self._Stransform(u)
+            u_plus_1 = u + 1.0
+            f = S_u * u / u_plus_1 - 1.0 / z
+
+            if with_derivative:
+                df = self._dStransform(u) * u / u_plus_1 + S_u / u_plus_1 ** 2
+                return f, df
+            else:
+                return f
+
+        z = np.asarray(z, dtype=_ctype)
+        z_flat = np.atleast_1d(z).ravel()
+        n = len(z_flat)
+        z_real = np.real(z_flat)
+
+        eps_target = np.imag(z_flat)
+        eps_start = 10.0
+        ratio = 10 ** 0.5
+        eps_steps = int(np.ceil(np.log10(eps_start / eps_target.min()) / np.log10(ratio))) + 1
+        eps_sequence = np.geomspace(eps_start, eps_target, num=eps_steps)
+        u = 1.0 / (z_real + 1j * eps_sequence[0])
+
+        for i in range(eps_steps):
+            z_i = z_real + 1j * eps_sequence[i]
+
+            converged = np.zeros(n, dtype=bool)
+
+            for _ in range(max_iter):
+                active = ~converged
+                if not np.any(active):
+                    break
+
+                u_a, z_a = u[active], z_i[active]
+
+                u_new, f, f_new = self._newton_step_batch(u_a, z_a, func)
+                u_new = self._backtrack_batch(u_a, u_new, f, f_new, z_a, func)
+
+                delta = np.abs(u_new - u_a)
+                newly_converged = (delta < tol * np.maximum(1.0, np.abs(u_a)))
                 converged[active] = newly_converged
                 u[active] = u_new
 
@@ -100,28 +162,23 @@ class EmpricalEvalDist:
         out_ld = (1.0 + u_ld) / z_ld
         out = out_ld.astype(_ctype)
         return out.reshape(z.shape)
-    
-    def _newton_step_batch(self, u: NDArray[_ctype], z: NDArray[_ctype]):
-        S_u = self._Stransform(u)
-        dS_u = self._dStransform(u)
 
-        u_plus_1 = 1.0 + u
-        f = u * (S_u * u / u_plus_1 - 1.0 / z)
-        df = u * (dS_u * u / u_plus_1 + S_u / u_plus_1 ** 2) + f
+    def _newton_step_batch(self, u: NDArray[_ctype], z: NDArray[_ctype], func):
+        f, df = func(u, z, with_derivative = True)
 
         safe = np.abs(df) >= 1e-14
         u1 = np.where(safe, u, u * 1.01)
-        S_u1 = np.where(safe, S_u, self._Stransform(u1))
-        f1 = np.where(safe, f, u1 * (S_u1 * u1 / (1.0 + u1) - 1.0 / z))
+        f1 = np.where(safe, f, func(u1, z))
         df = np.where(safe, df, (f1 - f + 1e-15) / (0.01 * u))
 
-        u_new = u - f/df
+        u_new = u - f / df 
         u_new = np.where(np.imag(u_new)>0, u_new.conj(), u_new)
 
-        f_new = u_new * (self._Stransform(u_new) * u_new / (1.0 + u_new) - 1.0 / z)
+        f_new = func(u_new, z)
+
         return u_new, f, f_new
     
-    def _backtrack_batch(self, u: NDArray[_ctype], u_new: NDArray[_ctype], f: NDArray[_ctype], f_new: NDArray[_ctype], z: NDArray[_ctype]):
+    def _backtrack_batch(self, u: NDArray[_ctype], u_new: NDArray[_ctype], f: NDArray[_ctype], f_new: NDArray[_ctype], z: NDArray[_ctype], func):
         alpha = np.ones(len(u), dtype=_ftype)
         thresh = np.abs(f) * 1.1
 
@@ -133,7 +190,7 @@ class EmpricalEvalDist:
             u_try = u + alpha * (u_new - u)
             u_try = np.where(np.imag(u_try)>0, u_try.conj(), u_try)
 
-            f_try = u_try * (self._Stransform(u_try) * u_try / (1.0 + u_try) - 1.0 / z)
+            f_try = func(u_try, z)
             improved = np.abs(f_try) < np.abs(f_new)
 
             u_new = np.where(improved, u_try, u_new)
@@ -143,6 +200,7 @@ class EmpricalEvalDist:
             iters += 1
 
         return u_new
+
 
 class MarchenkoPastur:
     def __init__(self, lam: _ftype, sig: _ftype = 1.0):
@@ -188,7 +246,7 @@ class MarchenkoPastur:
 
         return out.reshape(shape)
     
-    def Caychytransform(self, z: NDArray[_ctype]) -> NDArray[_ctype]: 
+    def Cauchytransform(self, z: NDArray[_ctype]) -> NDArray[_ctype]: 
         pass
 
     # def Rtransform(self, z: sp.Symbol) -> sp.Symbol:
@@ -230,4 +288,10 @@ def classical_multiplicative_convolution(dist1: EmpricalEvalDist, dist2: Emprica
         integrand = dist1.pdf(x / u) * dist2.pdf(u) / u * du_dt 
         return np.trapezoid(integrand, t, axis=1)
     
-    return EmpricalEvalDist(_pdf=pdf_prod)
+    def Cauchy_prod(z: NDArray[_ctype]) -> NDArray[_ctype]:
+        pass
+
+    def dCauchy_prod(z: NDArray[_ctype]) -> NDArray[_ctype]:
+        pass
+
+    return EmpricalEvalDist(_pdf=pdf_prod, _Cauchytransform = Cauchy_prod, _dCauchytransform = dCauchy_prod)
