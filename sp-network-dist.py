@@ -64,7 +64,7 @@ class EmpricalEvalDist:
             f = Cauchy_1_over_u / u - 1.0 - z
 
             if with_derivative:
-                df = self._dCauchytransform(1/u) / u - Cauchy_1_over_u / u ** 2
+                df = -self._dCauchytransform(1/u) / u ** 3 - Cauchy_1_over_u / u ** 2
                 return f, df
             else:
                 return f
