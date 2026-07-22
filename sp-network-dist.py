@@ -45,9 +45,9 @@ class EmpricalEvalDist:
             return self._Cauchy(z)
         
         elif self._pdf is not None:
-            t = np.linspace(-10, 10, 10000)[np.newaxis, :]
-            x = np.sinh(t)
-            dx_dt = np.cosh(t)
+            t = np.linspace(0.01, 10, 10000)[np.newaxis, :]
+            x = np.tanh(t)
+            dx_dt = 1.0 - x ** 2
 
             z = z[:, np.newaxis]
             integrand = 1 / (z - x) * self._pdf(x) * dx_dt 
@@ -72,9 +72,12 @@ class EmpricalEvalDist:
     def _S_from_Cauchy(self, z: NDArray[_ctype]) -> NDArray[_ctype]:
         
         def target_func(u: NDArray[_ctype], z: NDArray[_ctype]) -> NDArray[_ctype]:
+            u = np.asarray(u, dtype=_ctype)
+            z = np.asarray(z, dtype=_ctype)
             return self.Cauchy(1/u) / u - 1.0 - z
         
         def initial_guess_func(z: NDArray[_ctype]) -> NDArray[_ctype]:
+            z = np.asarray(z, dtype=_ctype)
             return 1.0 / z
             
         z = np.asarray(z, dtype=_ctype)
@@ -91,9 +94,12 @@ class EmpricalEvalDist:
     def _Cauchy_from_S(self, z: NDArray[_ctype]) -> NDArray[_ctype]:
         
         def target_func(u: NDArray[_ctype], z: NDArray[_ctype]) -> NDArray[_ctype]:
+            u = np.asarray(u, dtype=_ctype)
+            z = np.asarray(z, dtype=_ctype)
             return self.Stransform(u) * u / (u + 1.0) - 1.0 / z
         
         def initial_guess_func(z: NDArray[_ctype]) -> NDArray[_ctype]:
+            z = np.asarray(z, dtype=_ctype)
             return 1.0 / z
 
         z = np.asarray(z, dtype=_ctype)
@@ -242,12 +248,23 @@ def free_multiplicative_convolution(dist1: EmpricalEvalDist, dist2: EmpricalEval
 def classical_multiplicative_convolution(dist1: EmpricalEvalDist, dist2: EmpricalEvalDist) -> EmpricalEvalDist:
     
     def pdf_prod(x: NDArray[_ftype]) -> NDArray[_ftype]:
-        t = np.linspace(-10, 10, 10000)[np.newaxis, :]
-        u = np.sinh(t)
-        du_dt = np.cosh(t)
+        # Computing classical multiplicative convolution using fast fourier transform 
 
-        x = x[:, np.newaxis]
-        integrand = dist1.pdf(x / u) * dist2.pdf(u) / u * du_dt 
-        return np.trapezoid(integrand, t, axis=1)
+        n = 10000
+        conv_len = 2 * n - 1
+
+        t_grid = np.geomspace(1e-6, 5, n)
+        t_log = np.log(t_grid)
+        dt_log = t_log[1] - t_log[0]
+
+        f = dist1.pdf(t_grid) * t_grid
+        g = dist2.pdf(t_grid) * t_grid
+
+        conv = np.fft.irfft(np.fft.rfft(f, n=conv_len) * np.fft.rfft(g, n=conv_len), n=conv_len) * dt_log
+
+        t_out = np.exp(np.linspace(t_log[0] + t_log[0], t_log[-1] + t_log[-1], conv_len))
+        conv_out = conv / t_out
+
+        return np.interp(x, t_out, conv_out, left=0.0, right=0.0)
 
     return EmpricalEvalDist(_pdf=pdf_prod)
