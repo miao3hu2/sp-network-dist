@@ -183,7 +183,7 @@ class EmpricalEvalDist:
         return u_new
 
 
-class MarchenkoPastur:
+class MarchenkoPastur(EmpricalEvalDist):
     def __init__(self, lam: _ftype, sig: _ftype = 1.0):
         if lam <= 0: 
             raise ValueError(f"lambda must be positive, got {lam}")
@@ -268,3 +268,42 @@ def classical_multiplicative_convolution(dist1: EmpricalEvalDist, dist2: Emprica
         return np.interp(x, t_out, conv_out, left=0.0, right=0.0)
 
     return EmpricalEvalDist(_pdf=pdf_prod)
+
+class Network:
+    def __init__(self, dim_input, dim_output, dist: EmpricalEvalDist):
+        self.dim_input = dim_input
+        self.dim_output = dim_output
+        self.dist = dist
+
+    def __add__(self, other: Network):
+        dist = classical_multiplicative_convolution(self.dist, other.dist)
+        return Network(self.dim_input * other.dim_input, self.dim_output * other.dim_output, dist)
+    
+    def __mul__(self, other: Network):
+        if self.dim_output == other.dim_input:
+            dist = free_multiplicative_convolution(self.dist, other.dist)
+            return Network(self.dim_input, other.dim_output, dist)
+        else:
+            raise ValueError("the output dimension of the first network must match with the input dimension of the second network!")
+
+    def __rmul__(self, other: int):
+        dist = self.dist
+        for _ in range(other):
+            dist = classical_multiplicative_convolution(dist, self.dist)
+        return Network(self.dim_input ** other, self.dim_output ** other, dist)
+
+    def __pow__(self, other):
+        if self.dim_input == self.dim_output:
+            dist = self.dist
+            for _ in range(other):
+                dist = free_multiplicative_convolution(dist, self.dist)
+            return Network(self.dim_input, self.dim_output, dist)
+        else:
+            raise ValueError("the input dimension and the output dimension must be the same!")
+
+class Neuron(Network):
+    def __init__(self, dim_input, dim_output, var = 1.0):
+        self.dim_input = dim_input
+        self.dim_output = dim_output
+        self.dist = MarchenkoPastur(dim_output / dim_input, var)
+        
