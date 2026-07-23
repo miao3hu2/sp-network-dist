@@ -104,7 +104,7 @@ class EmpiricalEvalDist:
         n = len(z)
         z_real = np.real(z)
 
-        eps_target = np.imag(z)
+        eps_target = np.fmax(np.abs(np.imag(z)), 1e-7)
         eps_start = 10.0
         ratio = 10 ** 0.5
         eps_steps = int(np.ceil(np.log10(eps_start / eps_target.min()) / np.log10(ratio))) + 1
@@ -140,6 +140,7 @@ class EmpiricalEvalDist:
         df = (f1 - f + 1e-15) / (0.01 * u)
 
         u_new = u - f / df 
+        u_new = np.where(np.isfinite(u_new), u_new, u)
         u_new = np.where(np.imag(u_new)>0, u_new.conj(), u_new)
 
         f_new = target_func(u_new, z)
