@@ -1,34 +1,33 @@
 import numpy as np
+from __future__ import annotations
 from numpy.typing import NDArray
 from typing import Callable
 
 _ftype = np.float64
 _ctype = np.complex128
 
-class EmpricalEvalDist:
+class EmpiricalEvalDist:
     def __init__(
             self, 
             _pdf: Callable[[NDArray[_ftype]], NDArray[_ftype]] | None = None, 
             _Cauchy: Callable[[NDArray[_ftype]], NDArray[_ftype]] | None = None, 
             _Stransform: Callable[[NDArray[_ctype]], NDArray[_ctype]] | None = None
             ) -> None:
-        if any([_pdf is not None, _Cauchy is not None, _Stransform is not None]):
-            self._pdf = _pdf
-            self._Cauchy = _Cauchy
-            self._Stransform = _Stransform
+        
+        self._pdf = _pdf
+        self._Cauchy = _Cauchy
+        self._Stransform = _Stransform
 
-        else: 
+        if _pdf is None and _Cauchy is None and _Stransform is None:
             raise ValueError("Please provide any of the PDF, Cauchy transform, or S transform of the distribution")
         
-    def __repr__(self) -> str:
+    def __repr__(self):
         pass
 
     def support(self):
         pass
 
     def pdf(self, x: NDArray[_ftype], eps: _ftype = 1e-7) -> NDArray[_ftype]:
-        x = np.asarray(x, dtype=_ftype)
-
         if self._pdf is not None:
             return self._pdf(x)
         
@@ -39,15 +38,13 @@ class EmpricalEvalDist:
             return (-1.0 / np.pi) * np.imag(self._Cauchy_from_S(x + 1j * eps))
 
     def Cauchy(self, z: NDArray[_ctype]) -> NDArray[_ctype]:
-        z = np.asarray(z, dtype=_ctype)
-
         if self._Cauchy is not None:
             return self._Cauchy(z)
         
         elif self._pdf is not None:
-            t = np.linspace(0.01, 10, 10000)[np.newaxis, :]
-            x = np.tanh(t)
-            dx_dt = 1.0 - x ** 2
+            t = np.linspace(0.01, np.pi / 2, 10000)[np.newaxis, :]
+            x = np.tan(t)
+            dx_dt = 1.0 / np.cos(t) ** 2
 
             z = z[:, np.newaxis]
             integrand = 1 / (z - x) * self._pdf(x) * dx_dt 
@@ -61,8 +58,6 @@ class EmpricalEvalDist:
         pass
 
     def Stransform(self, z: NDArray[_ctype]) -> NDArray[_ctype]:
-        z = np.asarray(z, dtype=_ctype)
-
         if self._Stransform is not None:
             return self._Stransform(z)
         
@@ -72,15 +67,11 @@ class EmpricalEvalDist:
     def _S_from_Cauchy(self, z: NDArray[_ctype]) -> NDArray[_ctype]:
         
         def target_func(u: NDArray[_ctype], z: NDArray[_ctype]) -> NDArray[_ctype]:
-            u = np.asarray(u, dtype=_ctype)
-            z = np.asarray(z, dtype=_ctype)
             return self.Cauchy(1/u) / u - 1.0 - z
         
         def initial_guess_func(z: NDArray[_ctype]) -> NDArray[_ctype]:
-            z = np.asarray(z, dtype=_ctype)
             return 1.0 / z
-            
-        z = np.asarray(z, dtype=_ctype)
+        
         z_flat = np.atleast_1d(z).ravel()
         
         u = self._finding_function_inverse(z_flat, initial_guess_func, target_func)
@@ -94,15 +85,11 @@ class EmpricalEvalDist:
     def _Cauchy_from_S(self, z: NDArray[_ctype]) -> NDArray[_ctype]:
         
         def target_func(u: NDArray[_ctype], z: NDArray[_ctype]) -> NDArray[_ctype]:
-            u = np.asarray(u, dtype=_ctype)
-            z = np.asarray(z, dtype=_ctype)
             return self.Stransform(u) * u / (u + 1.0) - 1.0 / z
         
         def initial_guess_func(z: NDArray[_ctype]) -> NDArray[_ctype]:
-            z = np.asarray(z, dtype=_ctype)
             return 1.0 / z
 
-        z = np.asarray(z, dtype=_ctype)
         z_flat = np.atleast_1d(z).ravel()
         
         u = self._finding_function_inverse(z_flat, initial_guess_func, target_func)
@@ -183,7 +170,7 @@ class EmpricalEvalDist:
         return u_new
 
 
-class MarchenkoPastur(EmpricalEvalDist):
+class MarchenkoPastur(EmpiricalEvalDist):
     def __init__(self, lam: _ftype, sig: _ftype = 1.0):
         if lam <= 0: 
             raise ValueError(f"lambda must be positive, got {lam}")
@@ -209,7 +196,6 @@ class MarchenkoPastur(EmpricalEvalDist):
         return (self.lam_minus, self.lam_plus)
     
     def pdf(self, x: NDArray[_ftype]) -> NDArray[_ftype]:
-        x = np.asarray(x, dtype=_ftype)
         shape = x.shape
         x = np.atleast_1d(x)
 
@@ -231,21 +217,19 @@ class MarchenkoPastur(EmpricalEvalDist):
         return (self.sig ** 2 * (1.0 - self.lam) - z - np.sqrt((z - self.sig ** 2 * (1.0 + self.lam)) ** 2 - 4.0 * self.lam * self.sig ** 4)) / (2.0 * self.lam * z * self.sig ** 2)
     
     def Rtransform(self, z: NDArray[_ctype]) -> NDArray[_ctype]:
-        z = np.asarray(z, dtype=_ctype)
         return self.sig ** 2 / (1.0 - self.sig ** 2 * self.lam * z)
 
     def Stransform(self, z: NDArray[_ctype]) -> NDArray[_ctype]:
-        z = np.asarray(z, dtype=_ctype)
         return 1.0 / (1.0 + self.lam * z) / self.sig ** 2
 
-def free_multiplicative_convolution(dist1: EmpricalEvalDist, dist2: EmpricalEvalDist) -> EmpricalEvalDist:
+def free_multiplicative_convolution(dist1: EmpiricalEvalDist, dist2: EmpiricalEvalDist) -> EmpiricalEvalDist:
 
     def Stransform_prod(z: NDArray[_ctype]) -> NDArray[_ctype]:
         return dist1.Stransform(z) * dist2.Stransform(z)
     
-    return EmpricalEvalDist(_Stransform=Stransform_prod)
+    return EmpiricalEvalDist(_Stransform=Stransform_prod)
 
-def classical_multiplicative_convolution(dist1: EmpricalEvalDist, dist2: EmpricalEvalDist) -> EmpricalEvalDist:
+def classical_multiplicative_convolution(dist1: EmpiricalEvalDist, dist2: EmpiricalEvalDist) -> EmpiricalEvalDist:
     
     def pdf_prod(x: NDArray[_ftype]) -> NDArray[_ftype]:
         # Computing classical multiplicative convolution using fast fourier transform 
@@ -267,10 +251,10 @@ def classical_multiplicative_convolution(dist1: EmpricalEvalDist, dist2: Emprica
 
         return np.interp(x, t_out, conv_out, left=0.0, right=0.0)
 
-    return EmpricalEvalDist(_pdf=pdf_prod)
+    return EmpiricalEvalDist(_pdf=pdf_prod)
 
 class Network:
-    def __init__(self, dim_input, dim_output, dist: EmpricalEvalDist):
+    def __init__(self, dim_input, dim_output, dist: EmpiricalEvalDist):
         self.dim_input = dim_input
         self.dim_output = dim_output
         self.dist = dist
@@ -288,14 +272,14 @@ class Network:
 
     def __rmul__(self, other: int):
         dist = self.dist
-        for _ in range(other):
+        for _ in range(other-1):
             dist = classical_multiplicative_convolution(dist, self.dist)
         return Network(self.dim_input ** other, self.dim_output ** other, dist)
 
     def __pow__(self, other):
         if self.dim_input == self.dim_output:
             dist = self.dist
-            for _ in range(other):
+            for _ in range(other-1):
                 dist = free_multiplicative_convolution(dist, self.dist)
             return Network(self.dim_input, self.dim_output, dist)
         else:
@@ -303,7 +287,4 @@ class Network:
 
 class Neuron(Network):
     def __init__(self, dim_input, dim_output, var = 1.0):
-        self.dim_input = dim_input
-        self.dim_output = dim_output
-        self.dist = MarchenkoPastur(dim_output / dim_input, var)
-        
+        super().__init__(dim_input, dim_output, MarchenkoPastur(dim_output / dim_input, var))
