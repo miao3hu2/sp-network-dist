@@ -21,8 +21,17 @@ class EmpiricalEvalDist:
         if _pdf is None and _Cauchy is None and _Stransform is None:
             raise ValueError("Please provide any of the PDF, Cauchy transform, or S transform of the distribution")
         
-    def __repr__(self):
-        pass
+    def __repr__(self) -> str:
+        provided = [
+            name
+            for name, fn in (
+                ("pdf", self._pdf),
+                ("Cauchy", self._Cauchy),
+                ("Stransform", self._Stransform),
+            )
+            if fn is not None
+        ]
+        return f"EmpiricalEvalDist(from={'+'.join(provided)})"
 
     def support(self):
         pass
@@ -254,38 +263,104 @@ def classical_multiplicative_convolution(dist1: EmpiricalEvalDist, dist2: Empiri
 
     return EmpiricalEvalDist(_pdf=pdf_prod)
 
-class Network:
-    def __init__(self, dim_input, dim_output, dist: EmpiricalEvalDist):
-        self.dim_input = dim_input
-        self.dim_output = dim_output
+class _Module:
+    dist: "EmpiricalEvalDist"
+    first_k: int
+    last_k: int
+    first_in: list
+    last_out: list
+
+    def __mul__(self, other):          # series   -> free convolution
+        if not isinstance(other, _Module):
+            return NotImplemented
+        return Sequential(self, other)
+
+    def __add__(self, other):          # parallel -> classical convolution
+        if not isinstance(other, _Module):
+            return NotImplemented
+        return Parallel(self, other)
+
+    def __pow__(self, n):              # repeated series
+        m = self
+        for _ in range(int(n) - 1):
+            m = Sequential(m, self)
+        return m
+
+    def __rmul__(self, n):            # int * module -> repeated parallel
+        m = self
+        for _ in range(int(n) - 1):
+            m = Parallel(m, self)
+        return m
+
+class Neuron(_Module):
+    def __init__(self, d_in, d_out, sig=1.0):
+        self.d_in, self.d_out, self.sig = int(d_in), int(d_out), sig
+        self.dist = MarchenkoPastur(self.d_out / self.d_in, sig)
+        self.first_k = self.last_k = 1
+        self.first_in = [self.d_in]
+        self.last_out = [self.d_out]
+
+
+def _check_series(a: _Module, b: _Module):
+    """Check that 
+    (1) last_out vs first_k : a's common output dim must split equally into b's
+        first-layer neurons.
+    (2) last_k  vs first_in : b's common input dim must split equally into a's
+        last-layer neurons.
+    """
+    if len(set(a.last_out)) != 1:
+        raise ValueError(f"last-layer output dims must be equal, got {a.last_out}")
+    if len(set(b.first_in)) != 1:
+        raise ValueError(f"first-layer input dims must be equal, got {b.first_in}")
+    d_out, d_in = a.last_out[0], b.first_in[0]
+    if d_out % b.first_k != 0:                        # (1) last_out vs first_k
+        raise ValueError(f"output dim {d_out} not divisible by {b.first_k} first-layer neurons")
+    if d_in % a.last_k != 0:                          # (2) last_k vs first_in
+        raise ValueError(f"input dim {d_in} not divisible by {a.last_k} last-layer neurons")
+
+class Sequential(_Module):
+    def __init__(self, *items, sig=1.0):
+        if all(isinstance(x, int) for x in items):
+            if len(items) < 2:
+                raise ValueError("need at least two connecting dims")
+            mods = [Neuron(items[i], items[i + 1], sig) for i in range(len(items) - 1)]
+        elif all(isinstance(x, _Module) for x in items):
+            mods = list(items)
+        else:
+            raise TypeError("Sequential args must be all ints or all modules")
+
+        dist = mods[0].dist
+        for a, b in zip(mods, mods[1:]):
+            _check_series(a, b)
+            dist = free_multiplicative_convolution(dist, b.dist)
+
         self.dist = dist
+        self.first_k, self.first_in = mods[0].first_k, mods[0].first_in
+        self.last_k, self.last_out = mods[-1].last_k, mods[-1].last_out
 
-    def __add__(self, other: Network):
-        dist = classical_multiplicative_convolution(self.dist, other.dist)
-        return Network(self.dim_input * other.dim_input, self.dim_output * other.dim_output, dist)
-    
-    def __mul__(self, other: Network):
-        if self.dim_output == other.dim_input:
-            dist = free_multiplicative_convolution(self.dist, other.dist)
-            return Network(self.dim_input, other.dim_output, dist)
-        else:
-            raise ValueError("the output dimension of the first network must match with the input dimension of the second network!")
+class Parallel(_Module):
+    def __init__(self, *modules):
+        if len(modules) < 2 or not all(isinstance(m, _Module) for m in modules):
+            raise TypeError("Parallel needs >= 2 modules (Neuron/Sequential/Parallel)")
 
-    def __rmul__(self, other: int):
-        dist = self.dist
-        for _ in range(other-1):
-            dist = classical_multiplicative_convolution(dist, self.dist)
-        return Network(self.dim_input ** other, self.dim_output ** other, dist)
+        dist = modules[0].dist
+        for m in modules[1:]:
+            dist = classical_multiplicative_convolution(dist, m.dist)
 
-    def __pow__(self, other):
-        if self.dim_input == self.dim_output:
-            dist = self.dist
-            for _ in range(other-1):
-                dist = free_multiplicative_convolution(dist, self.dist)
-            return Network(self.dim_input, self.dim_output, dist)
-        else:
-            raise ValueError("the input dimension and the output dimension must be the same!")
+        self.dist = dist
+        self.first_k = sum(m.first_k for m in modules)
+        self.last_k = sum(m.last_k for m in modules)
+        self.first_in = [x for m in modules for x in m.first_in]
+        self.last_out = [x for m in modules for x in m.last_out]
 
-class Neuron(Network):
-    def __init__(self, dim_input, dim_output, var = 1.0):
-        super().__init__(dim_input, dim_output, MarchenkoPastur(dim_output / dim_input, var))
+def infer(network, d):
+    """Concrete _Module for a series-parallel `network`, given the integer `d`
+    that is the dimension of the space connecting each pair of neurons.
+
+    `network` is either a _Module (returned as-is) or a callable u -> _Module
+    written with the canonical * / + operators, e.g. ``lambda u: (u * u) + u``.
+    Every connecting space is assigned dimension `d`, so each neuron is d -> d;
+    the series checks then constrain which `d` are valid."""
+    if isinstance(network, _Module):
+        return network
+    return network(Neuron(d, d))
